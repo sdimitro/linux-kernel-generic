@@ -1412,6 +1412,7 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 	}
 
 	ret = iscsi_target_start_negotiation(login, conn);
+	pr_err("DLPX: main: iscsi_target_start_nego returned %d\n", ret);
 	if (ret < 0)
 		goto new_sess_out;
 

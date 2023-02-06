@@ -9,6 +9,9 @@
  ******************************************************************************/
 
 #include <linux/ctype.h>
+#include <linux/delay.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
 #include <linux/sched/signal.h>
@@ -29,6 +32,22 @@
 
 #define MAX_LOGIN_PDUS  7
 #define TEXT_LEN	4096
+
+static bool dlpx_login_block = false;
+module_param_named(dlpx_login_block, dlpx_login_block, bool, 0644);
+MODULE_PARM_DESC(dlpx_login_block, "Refer to ESCL-4240");
+
+static bool dlpx_login_fix = false;
+module_param_named(dlpx_login_fix, dlpx_login_fix, bool, 0644);
+MODULE_PARM_DESC(dlpx_login_fix, "Refer to ESCL-4240");
+
+static unsigned int dlpx_login_fix_timer = 100;
+module_param_named(dlpx_login_fix_timer, dlpx_login_fix_timer, uint, 0644);
+MODULE_PARM_DESC(dlpx_login_timer, "Refer to ESCL-4240");
+
+static bool dlpx_login_force_fix = false;
+module_param_named(dlpx_login_force_fix, dlpx_login_force_fix, bool, 0644);
+MODULE_PARM_DESC(dlpx_login_force_fix, "Refer to ESCL-4240");
 
 void convert_null_to_semi(char *buf, int len)
 {
@@ -625,11 +644,27 @@ static void iscsi_target_do_login_rx(struct work_struct *work)
 			conn, current->comm, current->pid);
 
 	rc = iscsi_target_do_login(conn, login);
+	pr_err("DLPX: worker: iscsi_target_do_login returned %d\n", rc);
+	if (rc == 1 && dlpx_login_block)
+		rc = 0;
+	pr_err("DLPX: worker: iscsi_target_do_login modified %d\n", rc);
+
 	if (rc < 0) {
 		goto err;
 	} else if (!rc) {
-		if (iscsi_target_sk_check_and_clear(conn, LOGIN_FLAGS_READ_ACTIVE))
+		int q = iscsi_target_sk_check_and_clear(conn, LOGIN_FLAGS_READ_ACTIVE);
+		pr_err("DLPX: worker: LOGIN_FLAGS_READ_ACTIVE check: %d - tunable %d\n",
+			q, dlpx_login_block);
+		if (q && !dlpx_login_block)
 			goto err;
+		if (dlpx_login_fix) {
+			msleep(dlpx_login_fix_timer);
+			pr_err("DLPX: calling deaccess: state: %d\n", conn->conn_state);
+			if (conn->conn_state < TARG_CONN_STATE_LOGGED_IN || dlpx_login_force_fix) {
+				pr_err("DLPX: fix triggered\n");
+				iscsit_deaccess_np(np, tpg, tpg_np);
+			}
+		}
 	} else if (rc == 1) {
 		iscsi_target_nego_release(conn);
 		iscsi_post_login_handler(np, conn, zero_tsih);
